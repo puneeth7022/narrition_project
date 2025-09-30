@@ -1,0 +1,313 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Bank Statement - Auto Ledger Filler (HTML)</title>
+  <style>
+    body { font-family: Arial, sans-serif; max-width:1100px; margin:20px auto; padding:10px; }
+    h1 { font-size:1.3rem; margin-bottom:6px; }
+    .row { display:flex; gap:12px; align-items:center; margin:8px 0; flex-wrap:wrap;}
+    label { font-weight:600; }
+    input[type="text"], select { padding:6px; min-width:220px; }
+    button { padding:8px 12px; cursor:pointer; }
+    table { border-collapse: collapse; width:100%; margin-top:12px; }
+    table, th, td { border:1px solid #ddd; }
+    th, td { padding:6px; text-align:left; font-size:0.9rem; }
+    .small { font-size:0.85rem; color:#444; }
+    .chip { display:inline-block; padding:4px 8px; border-radius:12px; background:#f0f0f0; margin:4px 6px 4px 0; cursor:pointer; }
+    .chip.selected { background:#cfeef0; }
+    #repeats { max-height:180px; overflow:auto; border:1px solid #eee; padding:8px; background:#fafafa; }
+    .notice { background:#fff4cc; padding:8px; border-left:4px solid #ffd24d; margin:8px 0; }
+  </style>
+</head>
+<body>
+  <h1>Bank Statement — Auto Ledger Filler (HTML + JS)</h1>
+  <p class="small">Upload your bank statement (Date, Narration, Debit, Credit). This runs entirely in your browser.</p>
+
+  <div class="row">
+    <label for="file">Upload Excel / CSV:</label>
+    <input id="file" type="file" accept=".xlsx,.xls,.csv" />
+    <button id="clearBtn">Clear</button>
+  </div>
+
+  <div id="controls" style="display:none;">
+    <div class="row">
+      <label>Detected sheet/columns:</label>
+      <select id="sheetSelect"></select>
+      <label>Column to scan:</label>
+      <select id="colSelect"></select>
+    </div>
+
+    <div class="row">
+      <div>
+        <label>Repeated Narrations (count > 1)</label>
+        <div id="repeats"></div>
+      </div>
+
+      <div style="min-width:300px;">
+        <label>Pick from repeated list (optional)</label><br/>
+        <select id="pickRepeat">
+          <option value="">-- none --</option>
+        </select>
+
+        <div style="margin-top:8px;">
+          <label>Or type text to match (case-insensitive substring):</label><br/>
+          <input id="manualText" type="text" placeholder="e.g., RAVI or UPI-RAVI-123" />
+        </div>
+
+        <div style="margin-top:8px;">
+          <label>Ledger Name to fill:</label><br/>
+          <input id="ledgerValue" type="text" placeholder="e.g., RAVI SALARY" />
+        </div>
+
+        <div style="margin-top:8px;">
+          <label>Match Mode:</label>
+          <select id="matchMode">
+            <option value="substring">substring (contains)</option>
+            <option value="exact">exact match</option>
+          </select>
+        </div>
+
+        <div class="row" style="margin-top:10px;">
+          <button id="applyBtn">Apply Fill</button>
+          <button id="downloadBtn" disabled>Download Updated Excel</button>
+        </div>
+
+        <div class="notice" id="status"></div>
+      </div>
+    </div>
+
+    <h3>Preview (first 20 rows)</h3>
+    <div id="preview"></div>
+  </div>
+
+  <!-- SheetJS -->
+  <script src="https://cdn.jsdelivr.net/npm/xlsx/dist/xlsx.full.min.js"></script>
+
+  <script>
+    let workbook = null;
+    let rawData = {}; // sheetName -> array of row objects
+    let currentSheet = '';
+    let headerCols = [];
+    const fileInput = document.getElementById('file');
+    const sheetSelect = document.getElementById('sheetSelect');
+    const colSelect = document.getElementById('colSelect');
+    const repeatsDiv = document.getElementById('repeats');
+    const pickRepeat = document.getElementById('pickRepeat');
+    const manualText = document.getElementById('manualText');
+    const ledgerValue = document.getElementById('ledgerValue');
+    const matchMode = document.getElementById('matchMode');
+    const applyBtn = document.getElementById('applyBtn');
+    const downloadBtn = document.getElementById('downloadBtn');
+    const preview = document.getElementById('preview');
+    const controls = document.getElementById('controls');
+    const sheetSel = document.getElementById('sheetSelect');
+    const status = document.getElementById('status');
+    const clearBtn = document.getElementById('clearBtn');
+
+    function resetAll() {
+      workbook = null; rawData = {}; currentSheet = ''; headerCols = [];
+      sheetSelect.innerHTML = ''; colSelect.innerHTML = ''; repeatsDiv.innerHTML = '';
+      pickRepeat.innerHTML = '<option value="">-- none --</option>'; preview.innerHTML = '';
+      controls.style.display = 'none'; downloadBtn.disabled = true; status.textContent = '';
+      fileInput.value = null;
+    }
+
+    clearBtn.addEventListener('click', resetAll);
+
+    fileInput.addEventListener('change', (ev) => {
+      const f = ev.target.files[0];
+      if (!f) return;
+      const reader = new FileReader();
+      const name = f.name.toLowerCase();
+
+      reader.onload = function(e) {
+        const data = e.target.result;
+        try {
+          if (name.endsWith('.csv')) {
+            // parse CSV
+            const wb = XLSX.read(data, { type: 'binary' , raw: true});
+            workbook = wb;
+          } else {
+            const wb = XLSX.read(data, { type: 'binary' });
+            workbook = wb;
+          }
+        } catch (err) {
+          // try as arraybuffer
+          try {
+            const arr = new Uint8Array(e.target.result);
+            workbook = XLSX.read(arr, { type:'array' });
+          } catch(e2) {
+            alert('Error reading file: ' + e2.message);
+            return;
+          }
+        }
+
+        // extract sheets
+        sheetSelect.innerHTML = '';
+        workbook.SheetNames.forEach((s, idx) => {
+          const opt = document.createElement('option'); opt.value = s; opt.textContent = s;
+          sheetSelect.appendChild(opt);
+        });
+        sheetSelect.onchange = () => loadSheet(sheetSelect.value);
+        // load first sheet
+        loadSheet(workbook.SheetNames[0]);
+        controls.style.display = 'block';
+      };
+
+      // read as binary string for compatibility
+      reader.readAsBinaryString(f);
+    });
+
+    function loadSheet(sheetName) {
+      currentSheet = sheetName;
+      const sheet = workbook.Sheets[sheetName];
+      const json = XLSX.utils.sheet_to_json(sheet, { defval: '' });
+      rawData[sheetName] = json;
+      // get headers
+      headerCols = [];
+      if (json.length > 0) headerCols = Object.keys(json[0]);
+      // populate column select
+      colSelect.innerHTML = '';
+      headerCols.forEach(c => {
+        const opt = document.createElement('option'); opt.value = c; opt.textContent = c;
+        colSelect.appendChild(opt);
+      });
+
+      // auto-select Narration-like column if exists
+      let autoIdx = headerCols.findIndex(h => /narrat|narration|description|details/i.test(h));
+      if (autoIdx >= 0) colSelect.selectedIndex = autoIdx;
+
+      computeRepeats();
+      renderPreview();
+    }
+
+    function computeRepeats() {
+      repeatsDiv.innerHTML = '';
+      pickRepeat.innerHTML = '<option value="">-- none --</option>';
+      const col = colSelect.value;
+      if (!col) return;
+      const arr = rawData[currentSheet].map(r => String(r[col] ?? '').trim());
+      // frequency map (case-insensitive normalized)
+      const freq = {};
+      arr.forEach(v => {
+        const k = v.toUpperCase();
+        if (!k) return;
+        freq[k] = (freq[k] || 0) + 1;
+      });
+      // filter >1 and sort by count desc
+      const repeats = Object.entries(freq).filter(([k,c]) => c > 1).sort((a,b)=>b[1]-a[1]);
+      if (repeats.length === 0) {
+        repeatsDiv.innerHTML = '<div class="small">No repeated items (count > 1) found in selected column.</div>';
+        return;
+      }
+      repeats.forEach(([text,count]) => {
+        const chip = document.createElement('div');
+        chip.className = 'chip';
+        chip.textContent = `${text} — ${count}`;
+        chip.title = text;
+        chip.onclick = () => {
+          // set pickRepeat selection
+          pickRepeat.value = text;
+          // highlight selection
+          document.querySelectorAll('.chip').forEach(c=>c.classList.remove('selected'));
+          chip.classList.add('selected');
+        };
+        repeatsDiv.appendChild(chip);
+
+        const opt = document.createElement('option');
+        opt.value = text;
+        opt.textContent = `${text} (${count})`;
+        pickRepeat.appendChild(opt);
+      });
+    }
+
+    colSelect.addEventListener('change', () => {
+      computeRepeats();
+      renderPreview();
+    });
+
+    pickRepeat.addEventListener('change', () => {
+      // highlight matching chip if exists
+      const val = pickRepeat.value;
+      document.querySelectorAll('.chip').forEach(c => {
+        c.classList.toggle('selected', c.title === val);
+      });
+    });
+
+    function renderPreview(limit=20) {
+      const data = rawData[currentSheet] || [];
+      const rows = data.slice(0, limit);
+      if (!rows.length) { preview.innerHTML = '<div class="small">No data to preview</div>'; return; }
+      const cols = Object.keys(rows[0]);
+      let html = '<table><thead><tr>';
+      cols.forEach(c=> html += `<th>${escapeHtml(c)}</th>`);
+      html += '</tr></thead><tbody>';
+      rows.forEach(r => {
+        html += '<tr>';
+        cols.forEach(c => html += `<td>${escapeHtml(String(r[c] ?? ''))}</td>`);
+        html += '</tr>';
+      });
+      html += '</tbody></table>';
+      preview.innerHTML = html;
+    }
+
+    function escapeHtml(s){ return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+    applyBtn.addEventListener('click', () => {
+      const sheet = currentSheet;
+      if (!sheet) { alert('No sheet loaded'); return; }
+      const col = colSelect.value;
+      const pick = pickRepeat.value;
+      const manual = manualText.value.trim();
+      const ledger = ledgerValue.value.trim();
+      const mode = matchMode.value;
+
+      const toMatch = pick || manual;
+      if (!toMatch) { alert('Please pick from list or type text to match.'); return; }
+      if (!ledger) { alert('Please type Ledger Name to fill.'); return; }
+
+      const data = rawData[sheet];
+      let filled = 0;
+      // ensure Ledger_Name column exists (preserve case if exists)
+      const ledgerCol = 'Ledger_Name';
+      data.forEach(row => {
+        const cell = String(row[col] ?? '').trim();
+        if (!cell) return;
+        if (mode === 'exact') {
+          if (cell.toUpperCase() === toMatch.toUpperCase()) {
+            if (!row[ledgerCol] || row[ledgerCol] !== ledger) {
+              row[ledgerCol] = ledger; filled++;
+            }
+          }
+        } else {
+          if (cell.toUpperCase().includes(toMatch.toUpperCase())) {
+            if (!row[ledgerCol] || row[ledgerCol] !== ledger) {
+              row[ledgerCol] = ledger; filled++;
+            }
+          }
+        }
+      });
+
+      status.textContent = `Filled ${filled} rows in column "${ledgerCol}". You can preview first rows below.`;
+      renderPreview(50);
+      downloadBtn.disabled = false;
+    });
+
+    downloadBtn.addEventListener('click', () => {
+      // build workbook from rawData
+      const outWb = XLSX.utils.book_new();
+      Object.keys(rawData).forEach(sheetName => {
+        const ws = XLSX.utils.json_to_sheet(rawData[sheetName]);
+        XLSX.utils.book_append_sheet(outWb, ws, sheetName);
+      });
+      const fname = 'bank_statement_filled.xlsx';
+      XLSX.writeFile(outWb, fname);
+    });
+
+    // small helper: when user clicks a chip it selects pickRepeat — handled above
+
+  </script>
+</body>
+</html>
