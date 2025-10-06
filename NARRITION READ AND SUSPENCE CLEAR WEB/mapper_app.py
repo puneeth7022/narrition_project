@@ -50,7 +50,7 @@ def parse_canara_pdf(file):
     # Final output format
     df_out = pd.DataFrame({
         "DATE": df["TRANS_DATE"],
-        "NARRATION": df["DESCRIPTION"],
+        "NARRITION": df["DESCRIPTION"],
         "DEBIT": df["WITHDRAWS"],
         "CREDIT": df["DEPOSIT"]
     })
@@ -205,5 +205,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
