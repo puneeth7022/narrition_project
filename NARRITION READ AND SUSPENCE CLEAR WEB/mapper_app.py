@@ -17,7 +17,9 @@ def to_date_str(val):
     except:
         return ""
 
-# 🔹 Canara Bank PDF → Excel parser
+import pdfplumber
+import pandas as pd
+
 def parse_canara_pdf(file):
     rows = []
     with pdfplumber.open(file) as pdf:
@@ -25,30 +27,36 @@ def parse_canara_pdf(file):
             table = page.extract_table()
             if table:
                 for row in table:
+                    # Skip empty rows
                     if any(cell and str(cell).strip() for cell in row):
+                        # Keep only first 8 columns if extra present
+                        if len(row) > 8:
+                            row = row[:8]
                         rows.append(row)
 
-    # 8 headers for Canara Bank
+    # Define 8 headers (standard Canara Bank format)
     headers = [
-        "TRANS_DATE","VALUE_DATE","BRANCH","REF_CHQNO",
-        "DESCRIPTION","WITHDRAWS","DEPOSIT","BALANCE"
+        "TRANS_DATE", "VALUE_DATE", "BRANCH", "REF_CHQNO",
+        "DESCRIPTION", "WITHDRAWS", "DEPOSIT", "BALANCE"
     ]
     
     df = pd.DataFrame(rows[1:], columns=headers)
 
-    # Clean numbers
-    for col in ["WITHDRAWS","DEPOSIT","BALANCE"]:
+    # Clean numeric columns
+    for col in ["WITHDRAWS", "DEPOSIT", "BALANCE"]:
         df[col] = df[col].astype(str).str.replace(",", "").str.strip()
         df[col] = pd.to_numeric(df[col], errors="coerce")
 
-    # Normalize to common format
+    # Final output format
     df_out = pd.DataFrame({
         "DATE": df["TRANS_DATE"],
-        "NARRITION": df["DESCRIPTION"],
+        "NARRATION": df["DESCRIPTION"],
         "DEBIT": df["WITHDRAWS"],
         "CREDIT": df["DEPOSIT"]
     })
+    
     return df_out
+
 
 # 🔹 Main App
 def main():
@@ -197,4 +205,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
